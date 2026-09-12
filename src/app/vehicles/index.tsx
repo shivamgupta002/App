@@ -130,7 +130,7 @@ export default function VehiclesScreen() {
           <View style={styles.card}>
             <TouchableOpacity
               style={styles.cardMain}
-              onPress={() => router.push(`/vehicle/${item.id}/qr`)}
+              onPress={() => router.push(`/vehicles/${item.id}/qr`)}
             >
               <View style={styles.cardRow}>
                 <Text style={styles.cardTitle}>
