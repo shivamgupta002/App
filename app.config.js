@@ -104,6 +104,13 @@ module.exports = ({ config }) => {
           imageWidth: 76,
         },
       ],
+      [
+       "expo-sharing",
+       {
+         android: { enabled: true },
+         ios: { enabled: true },
+       },
+     ],
       // expo-secure-store has no config plugin requirement on its own, but
       // is listed here as a reminder this app relies on it for token
       // storage (see src/api/client.ts) rather than AsyncStorage.
