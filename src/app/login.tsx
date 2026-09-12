@@ -7,16 +7,27 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { Link, useRouter } from "expo-router";
 
 import { useAuth } from "@/context/AuthContext";
-import { validateEmail, validatePassword } from "@/utils/validation";
+import { validateEmail } from "@/utils/validation";
 
 interface FormErrors {
   email?: string;
   password?: string;
 }
 
+/**
+ * Sign-in screen — POST /auth/login (see app/routers/auth.py::login).
+ * On success, AuthContext flips global status to "signedIn" and
+ * src/app/index.tsx (the auth gate) redirects to /vehicles automatically,
+ * so this screen only needs to call login() and doesn't navigate itself.
+ *
+ * Error handling mirrors the backend's deliberately generic messaging:
+ * 401 never distinguishes "no such email" from "wrong password", and 403
+ * covers both the unverified-phone and suspended-account cases (backend
+ * uses the same status for both, so we surface its detail message as-is).
+ */
 export default function LoginScreen() {
   const router = useRouter();
   const { login } = useAuth();
@@ -31,10 +42,7 @@ export default function LoginScreen() {
     const next: FormErrors = {};
     const emailCheck = validateEmail(email);
     if (!emailCheck.valid) next.email = emailCheck.error;
-
-    const passwordCheck = validatePassword(password);
-    if (!passwordCheck.valid) next.password = passwordCheck.error;
-
+    if (!password) next.password = "Password is required";
     setErrors(next);
     return Object.keys(next).length === 0;
   }, [email, password]);
@@ -46,18 +54,17 @@ export default function LoginScreen() {
     setSubmitting(true);
     try {
       await login(email.trim(), password);
+      // AuthContext status flips to "signedIn"; the root index.tsx gate
+      // redirects to /vehicles. Nudge router just in case this screen was
+      // reached via deep link rather than the gate.
       router.replace("/");
     } catch (err: any) {
       const status = err?.response?.status;
+      const detail = err?.response?.data?.detail;
       if (status === 401) {
-        setSubmitError("Incorrect email or password.");
+        setSubmitError(detail ?? "Invalid email or password");
       } else if (status === 403) {
-        setSubmitError(
-          err.response?.data?.detail ??
-            "Please verify your phone number before logging in."
-        );
-      } else if (status === 429) {
-        setSubmitError("Too many attempts. Please wait a few minutes.");
+        setSubmitError(detail ?? "Please verify your account before logging in");
       } else {
         setSubmitError("Something went wrong. Please try again.");
       }
@@ -68,7 +75,7 @@ export default function LoginScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Log in</Text>
+      <Text style={styles.title}>Welcome back</Text>
 
       <View style={styles.field}>
         <TextInput
@@ -96,9 +103,7 @@ export default function LoginScreen() {
             setErrors((e) => ({ ...e, password: undefined }));
           }}
         />
-        {errors.password ? (
-          <Text style={styles.errorText}>{errors.password}</Text>
-        ) : null}
+        {errors.password ? <Text style={styles.errorText}>{errors.password}</Text> : null}
       </View>
 
       {submitError ? <Text style={styles.errorText}>{submitError}</Text> : null}
@@ -115,12 +120,11 @@ export default function LoginScreen() {
         )}
       </TouchableOpacity>
 
-      <TouchableOpacity
-        style={styles.linkButton}
-        onPress={() => router.push("/register")}
-      >
-        <Text style={styles.linkText}>Don't have an account? Sign up</Text>
-      </TouchableOpacity>
+      <Link href="/register" asChild>
+        <TouchableOpacity style={styles.linkButton}>
+          <Text style={styles.linkText}>Don't have an account? Sign up</Text>
+        </TouchableOpacity>
+      </Link>
     </View>
   );
 }
@@ -146,6 +150,6 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.5 },
   buttonPrimaryText: { color: "#fff", fontWeight: "600", fontSize: 16 },
-  linkButton: { paddingVertical: 14, alignItems: "center" },
+  linkButton: { marginTop: 16, alignItems: "center" },
   linkText: { color: "#208AEF", fontSize: 14, fontWeight: "500" },
 });

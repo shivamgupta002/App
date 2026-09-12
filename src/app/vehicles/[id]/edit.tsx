@@ -1,0 +1,300 @@
+import { useCallback, useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { useLocalSearchParams, useRouter } from "expo-router";
+
+import { getVehicle, updateVehicle } from "@/api/client";
+import { Vehicle } from "@/api/types";
+import { validatePhoneNumber } from "@/utils/validation";
+
+type VehicleType = "car" | "bike";
+type LoadState = "loading" | "ready" | "error";
+
+interface FormErrors {
+  brand?: string;
+  model?: string;
+  color?: string;
+  emergency_contact?: string;
+}
+
+function notBlank(value: string): boolean {
+  return value.trim().length > 0;
+}
+
+/**
+ * Edit an existing vehicle — PUT /vehicles/{id} (see app/routers/vehicles.py
+ * ::update_vehicle / app/schemas/vehicle.py::VehicleUpdateRequest).
+ *
+ * vehicle_number is shown read-only, never editable: the backend schema
+ * deliberately excludes it from updates (treated as immutable after
+ * creation — the QR code resolves via its own token, not the plate), so
+ * there is no endpoint that would accept a change to it here.
+ */
+export default function EditVehicleScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
+
+  const [state, setState] = useState<LoadState>("loading");
+  const [vehicleNumber, setVehicleNumber] = useState("");
+  const [vehicleType, setVehicleType] = useState<VehicleType>("car");
+  const [brand, setBrand] = useState("");
+  const [model, setModel] = useState("");
+  const [color, setColor] = useState("");
+  const [emergencyContact, setEmergencyContact] = useState("");
+
+  const [errors, setErrors] = useState<FormErrors>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!id) return;
+    setState("loading");
+    try {
+      const v: Vehicle = await getVehicle(id);
+      setVehicleNumber(v.vehicle_number);
+      setVehicleType(v.vehicle_type);
+      setBrand(v.brand);
+      setModel(v.model);
+      setColor(v.color);
+      setEmergencyContact(v.emergency_contact);
+      setState("ready");
+    } catch {
+      setState("error");
+    }
+  }, [id]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const validateAll = useCallback((): boolean => {
+    const next: FormErrors = {};
+    if (!notBlank(brand)) next.brand = "Brand is required";
+    if (!notBlank(model)) next.model = "Model is required";
+    if (!notBlank(color)) next.color = "Color is required";
+
+    const contactCheck = validatePhoneNumber(emergencyContact);
+    if (!contactCheck.valid) next.emergency_contact = contactCheck.error;
+
+    setErrors(next);
+    return Object.keys(next).length === 0;
+  }, [brand, model, color, emergencyContact]);
+
+  const handleSubmit = useCallback(async () => {
+    if (!id) return;
+    setSubmitError(null);
+    if (!validateAll()) return;
+
+    setSubmitting(true);
+    try {
+      await updateVehicle(id, {
+        vehicle_type: vehicleType,
+        brand: brand.trim(),
+        model: model.trim(),
+        color: color.trim(),
+        emergency_contact: emergencyContact.trim(),
+      });
+      router.back();
+    } catch (err: any) {
+      const status = err?.response?.status;
+      if (status === 404) {
+        setSubmitError("This vehicle couldn't be found.");
+      } else {
+        setSubmitError("Something went wrong. Please try again.");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }, [id, vehicleType, brand, model, color, emergencyContact, router, validateAll]);
+
+  if (state === "loading") {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+
+  if (state === "error") {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.title}>Couldn't load this vehicle</Text>
+        <TouchableOpacity style={styles.buttonSecondary} onPress={load}>
+          <Text style={styles.buttonSecondaryText}>Retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Edit vehicle</Text>
+
+      <View style={styles.field}>
+        <Text style={styles.readOnlyLabel}>Vehicle number</Text>
+        <View style={styles.readOnlyInput}>
+          <Text style={styles.readOnlyText}>{vehicleNumber}</Text>
+        </View>
+      </View>
+
+      <View style={styles.typeRow}>
+        {(["car", "bike"] as VehicleType[]).map((type) => (
+          <TouchableOpacity
+            key={type}
+            style={[styles.typeButton, vehicleType === type && styles.typeButtonActive]}
+            onPress={() => setVehicleType(type)}
+          >
+            <Text
+              style={[
+                styles.typeButtonText,
+                vehicleType === type && styles.typeButtonTextActive,
+              ]}
+            >
+              {type === "car" ? "Car" : "Bike"}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <View style={styles.field}>
+        <TextInput
+          style={styles.input}
+          placeholder="Brand (e.g. Toyota)"
+          value={brand}
+          onChangeText={(v) => {
+            setBrand(v);
+            setErrors((e) => ({ ...e, brand: undefined }));
+          }}
+        />
+        {errors.brand ? <Text style={styles.errorText}>{errors.brand}</Text> : null}
+      </View>
+
+      <View style={styles.field}>
+        <TextInput
+          style={styles.input}
+          placeholder="Model (e.g. Innova)"
+          value={model}
+          onChangeText={(v) => {
+            setModel(v);
+            setErrors((e) => ({ ...e, model: undefined }));
+          }}
+        />
+        {errors.model ? <Text style={styles.errorText}>{errors.model}</Text> : null}
+      </View>
+
+      <View style={styles.field}>
+        <TextInput
+          style={styles.input}
+          placeholder="Color (e.g. White)"
+          value={color}
+          onChangeText={(v) => {
+            setColor(v);
+            setErrors((e) => ({ ...e, color: undefined }));
+          }}
+        />
+        {errors.color ? <Text style={styles.errorText}>{errors.color}</Text> : null}
+      </View>
+
+      <View style={styles.field}>
+        <TextInput
+          style={styles.input}
+          placeholder="Emergency contact (+919876543210)"
+          keyboardType="phone-pad"
+          value={emergencyContact}
+          onChangeText={(v) => {
+            setEmergencyContact(v);
+            setErrors((e) => ({ ...e, emergency_contact: undefined }));
+          }}
+        />
+        {errors.emergency_contact ? (
+          <Text style={styles.errorText}>{errors.emergency_contact}</Text>
+        ) : null}
+      </View>
+
+      {submitError ? <Text style={styles.errorText}>{submitError}</Text> : null}
+
+      <TouchableOpacity
+        style={[styles.buttonPrimary, submitting && styles.buttonDisabled]}
+        onPress={handleSubmit}
+        disabled={submitting}
+      >
+        {submitting ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.buttonPrimaryText}>Save changes</Text>
+        )}
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.linkButton} onPress={() => router.back()}>
+        <Text style={styles.linkText}>Cancel</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, padding: 24, justifyContent: "center", gap: 4 },
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+    gap: 12,
+  },
+  title: { fontSize: 22, fontWeight: "700", textAlign: "center", marginBottom: 16 },
+  typeRow: { flexDirection: "row", gap: 10, marginBottom: 12 },
+  typeButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  typeButtonActive: { backgroundColor: "#208AEF", borderColor: "#208AEF" },
+  typeButtonText: { fontSize: 15, fontWeight: "600", color: "#333" },
+  typeButtonTextActive: { color: "#fff" },
+  field: { marginBottom: 10 },
+  input: {
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 10,
+    padding: 14,
+    fontSize: 15,
+  },
+  readOnlyLabel: { fontSize: 12, color: "#888", marginBottom: 4 },
+  readOnlyInput: {
+    borderWidth: 1,
+    borderColor: "#eee",
+    backgroundColor: "#f5f5f5",
+    borderRadius: 10,
+    padding: 14,
+  },
+  readOnlyText: { fontSize: 15, color: "#666" },
+  errorText: { color: "#D92D20", fontSize: 12, marginTop: 4 },
+  buttonPrimary: {
+    backgroundColor: "#208AEF",
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: "center",
+    marginTop: 12,
+  },
+  buttonDisabled: { opacity: 0.5 },
+  buttonPrimaryText: { color: "#fff", fontWeight: "600", fontSize: 16 },
+  buttonSecondary: {
+    borderWidth: 1,
+    borderColor: "#208AEF",
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 10,
+  },
+  buttonSecondaryText: { color: "#208AEF", fontWeight: "600", fontSize: 16 },
+  linkButton: { marginTop: 12, alignItems: "center" },
+  linkText: { color: "#888", fontSize: 14 },
+});

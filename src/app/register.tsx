@@ -7,7 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { Link, useRouter } from "expo-router";
 
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -166,6 +166,12 @@ export default function RegisterScreen() {
           <Text style={styles.buttonPrimaryText}>Register</Text>
         )}
       </TouchableOpacity>
+
+      <Link href="/login" asChild>
+        <TouchableOpacity style={styles.linkButton}>
+          <Text style={styles.linkText}>Already have an account? Log in</Text>
+        </TouchableOpacity>
+      </Link>
     </View>
   );
 }
@@ -191,4 +197,6 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.5 },
   buttonPrimaryText: { color: "#fff", fontWeight: "600", fontSize: 16 },
+  linkButton: { marginTop: 16, alignItems: "center" },
+  linkText: { color: "#208AEF", fontSize: 14, fontWeight: "500" },
 });

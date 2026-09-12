@@ -196,6 +196,28 @@ export async function createVehicle(payload: Omit<Vehicle, "id" | "is_active" | 
 }
 
 /**
+ * Updates an existing vehicle. Mirrors PUT /vehicles/{id} (see
+ * app/routers/vehicles.py::update_vehicle / app/schemas/vehicle.py::
+ * VehicleUpdateRequest) — every field is optional so callers can send a
+ * partial patch, and `vehicle_number` is deliberately NOT accepted here:
+ * the backend schema doesn't allow updating it (it's treated as immutable
+ * after creation), so it must be omitted rather than sent as unchanged.
+ * Ownership is enforced server-side; a vehicle that isn't the caller's own
+ * (or doesn't exist) returns 404, same "don't leak existence" behavior as
+ * the other vehicle routes.
+ */
+export async function updateVehicle(
+  vehicleId: string,
+  payload: Partial<
+    Pick<Vehicle, "vehicle_type" | "brand" | "model" | "color" | "emergency_contact">
+  >
+): Promise<Vehicle> {
+  if (USE_MOCK) throw new Error("updateVehicle mock not implemented");
+  const { data } = await api.put<Vehicle>(`/vehicles/${vehicleId}`, payload);
+  return data;
+}
+
+/**
  * Fetches this vehicle's one-and-only QR code, creating it on the vehicle's
  * very first call. This is NOT a "regenerate" action — the backend
  * (app/routers/qr.py::generate_vehicle_qr / app/services/qr_service.py::
