@@ -12,6 +12,7 @@
     "expo-glass-effect": "~57.0.2",
     "expo-image": "~57.0.4",
     "expo-linking": "~57.0.9",
+    "expo-local-authentication": "~57.0.3",
     "expo-print": "~57.0.2",
     "expo-router": "~57.0.20",
     "expo-secure-store": "^57.0.3",
@@ -33,6 +34,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "dotenv": "^17.4.2",
     "typescript": "~6.0.3"
   },
   "scripts": {

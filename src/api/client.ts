@@ -1,6 +1,7 @@
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from "axios";
-import * as SecureStore from "expo-secure-store";
 import Constants from "expo-constants";
+
+import { secureStorage } from "@/utils/secureStorage";
 import {
   PublicVehicleResponse,
   QRCodeResponse,
@@ -31,21 +32,22 @@ const SCAN_BASE_URL: string =
 const ACCESS_TOKEN_KEY = "pc_access_token";
 const REFRESH_TOKEN_KEY = "pc_refresh_token";
 
-// ---- token storage (SecureStore, not AsyncStorage) ----
+// ---- token storage (via secureStorage: SecureStore on native, localStorage
+// fallback on web — see src/utils/secureStorage.ts for why) ----
 export const tokenStorage = {
   async getAccessToken() {
-    return SecureStore.getItemAsync(ACCESS_TOKEN_KEY);
+    return secureStorage.getItemAsync(ACCESS_TOKEN_KEY);
   },
   async getRefreshToken() {
-    return SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
+    return secureStorage.getItemAsync(REFRESH_TOKEN_KEY);
   },
   async setTokens(tokens: TokenResponse) {
-    await SecureStore.setItemAsync(ACCESS_TOKEN_KEY, tokens.access_token);
-    await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, tokens.refresh_token);
+    await secureStorage.setItemAsync(ACCESS_TOKEN_KEY, tokens.access_token);
+    await secureStorage.setItemAsync(REFRESH_TOKEN_KEY, tokens.refresh_token);
   },
   async clear() {
-    await SecureStore.deleteItemAsync(ACCESS_TOKEN_KEY);
-    await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+    await secureStorage.deleteItemAsync(ACCESS_TOKEN_KEY);
+    await secureStorage.deleteItemAsync(REFRESH_TOKEN_KEY);
   },
 };
 
@@ -95,7 +97,7 @@ async function refreshAccessToken(): Promise<string | null> {
         const refresh_token = await tokenStorage.getRefreshToken();
         if (!refresh_token) return null;
         const { data } = await axios.post(`${API_BASE_URL}/auth/refresh`, { refresh_token });
-        await SecureStore.setItemAsync(ACCESS_TOKEN_KEY, data.access_token);
+        await secureStorage.setItemAsync(ACCESS_TOKEN_KEY, data.access_token);
         return data.access_token as string;
       } catch {
         return null;
@@ -246,4 +248,4 @@ export async function fetchPublicVehicleByToken(token: string): Promise<PublicVe
   }
   const { data } = await api.get<PublicVehicleResponse>(`/vehicle/${token}`);
   return data;
-}   
+}
