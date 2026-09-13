@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -39,15 +39,15 @@ interface FormErrors {
  * covers both the unverified-phone and suspended-account cases (backend
  * uses the same status for both, so we surface its detail message as-is).
  *
- * Visual/animation layer added on top of the same logic:
- *   - Staggered entrance (logo -> title -> fields -> button -> link) using
- *     Reanimated's built-in `entering` transitions (FadeInDown/FadeInUp),
- *     no manual worklets needed.
- *   - Button scales down on press for tactile feedback (Animated API,
- *     runs on the UI thread via Reanimated's shared values).
- *   - On a failed login, the error text + input card shake horizontally
- *     once, drawing the eye without being obnoxious.
- *   - Inputs get a subtle border-color highlight on focus.
+ * Visual/animation layer on top of the same logic:
+ *   - Staggered entrance (logo -> title -> fields -> button -> link).
+ *   - Button scales down on press for tactile feedback.
+ *   - Failed login/validation shakes the card once.
+ *   - Inputs highlight on focus.
+ *   - Password field has a show/hide toggle: the eye glyph pops (scale
+ *     bounce) and flips (scaleX) when tapped, using plain emoji glyphs so
+ *     no icon-font dependency is needed — swap for @expo/vector-icons'
+ *     `Eye`/`EyeOff` later if you add that package.
  */
 export default function LoginScreen() {
   const router = useRouter();
@@ -55,6 +55,7 @@ export default function LoginScreen() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -64,6 +65,8 @@ export default function LoginScreen() {
   // --- animation values ---
   const buttonScale = useSharedValue(1);
   const shakeX = useSharedValue(0);
+  const eyeScale = useSharedValue(1);
+  const eyeFlip = useSharedValue(1); // 1 = normal, 0 = mid-flip (scaleX)
 
   const buttonAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: buttonScale.value }],
@@ -71,6 +74,10 @@ export default function LoginScreen() {
 
   const shakeAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: shakeX.value }],
+  }));
+
+  const eyeAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: eyeScale.value }, { scaleX: eyeFlip.value }],
   }));
 
   const triggerShake = useCallback(() => {
@@ -82,6 +89,19 @@ export default function LoginScreen() {
       withTiming(0, { duration: 45 })
     );
   }, [shakeX]);
+
+  const toggleShowPassword = useCallback(() => {
+    // Pop + flip animation on every tap, then flip the actual state.
+    eyeScale.value = withSequence(
+      withTiming(0.6, { duration: 90 }),
+      withSpring(1, { damping: 9, stiffness: 220 })
+    );
+    eyeFlip.value = withSequence(
+      withTiming(0, { duration: 90 }),
+      withTiming(1, { duration: 90 })
+    );
+    setShowPassword((prev) => !prev);
+  }, [eyeScale, eyeFlip]);
 
   const validateAll = useCallback((): boolean => {
     const next: FormErrors = {};
@@ -188,19 +208,36 @@ export default function LoginScreen() {
 
           <View style={styles.field}>
             <Text style={styles.label}>Password</Text>
-            <TextInput
-              style={[styles.input, passwordFocused && styles.inputFocused]}
-              placeholder="••••••••"
-              placeholderTextColor="#a3a3a3"
-              secureTextEntry
-              value={password}
-              onFocus={() => setPasswordFocused(true)}
-              onBlur={() => setPasswordFocused(false)}
-              onChangeText={(v) => {
-                setPassword(v);
-                setErrors((e) => ({ ...e, password: undefined }));
-              }}
-            />
+            <View style={styles.passwordRow}>
+              <TextInput
+                style={[
+                  styles.input,
+                  styles.passwordInput,
+                  passwordFocused && styles.inputFocused,
+                ]}
+                placeholder="••••••••"
+                placeholderTextColor="#a3a3a3"
+                secureTextEntry={!showPassword}
+                value={password}
+                onFocus={() => setPasswordFocused(true)}
+                onBlur={() => setPasswordFocused(false)}
+                onChangeText={(v) => {
+                  setPassword(v);
+                  setErrors((e) => ({ ...e, password: undefined }));
+                }}
+              />
+              <TouchableOpacity
+                style={styles.eyeButton}
+                onPress={toggleShowPassword}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                accessibilityRole="button"
+              >
+                <Animated.Text style={[styles.eyeGlyph, eyeAnimatedStyle]}>
+                  {showPassword ? "🙈" : "👁️"}
+                </Animated.Text>
+              </TouchableOpacity>
+            </View>
             {errors.password ? (
               <Text style={styles.errorText}>{errors.password}</Text>
             ) : null}
@@ -337,6 +374,24 @@ const styles = StyleSheet.create({
     borderColor: ACCENT,
     backgroundColor: "#fff",
   },
+  passwordRow: {
+    position: "relative",
+    justifyContent: "center",
+  },
+  passwordInput: {
+    paddingRight: 46,
+  },
+  eyeButton: {
+    position: "absolute",
+    right: 8,
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+    width: 36,
+  },
+  eyeGlyph: {
+    fontSize: 20,
+  },
   errorText: { color: "#D92D20", fontSize: 12, marginTop: 6, marginLeft: 2 },
   submitError: {
     color: "#D92D20",
@@ -362,4 +417,4 @@ const styles = StyleSheet.create({
   linkButton: { marginTop: 22, alignItems: "center" },
   linkText: { color: "#6B7A99", fontSize: 14 },
   linkTextBold: { color: ACCENT, fontWeight: "700" },
-}); 
+});
