@@ -271,3 +271,8 @@ export async function fetchPublicVehicleByToken(token: string): Promise<PublicVe
   const { data } = await api.get<PublicVehicleResponse>(`/vehicle/${token}`);
   return data;
 }
+
+export async function deleteVehicle(vehicleId: string): Promise<void> {
+  if (USE_MOCK) return;
+  await api.delete(`/vehicles/${vehicleId}`);
+}
