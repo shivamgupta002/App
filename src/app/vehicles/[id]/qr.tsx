@@ -13,7 +13,18 @@ import {
 import { useLocalSearchParams } from "expo-router";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
-import * as FileSystem from "expo-file-system";
+// SDK 54+ moved the old promise-based API (copyAsync, downloadAsync,
+// cacheDirectory, etc.) to a dedicated "/legacy" entrypoint — the default
+// "expo-file-system" export now points at the new File/Directory classes
+// and throws on these calls instead. This file uses the legacy functions
+// throughout, so import from there explicitly rather than "expo-file-system".
+import * as FileSystem from "expo-file-system/legacy";
+// SDK 54 also introduced a new default API for expo-media-library
+// (Asset.create(), Query, etc. from "expo-media-library/next"-style
+// imports). "/legacy" keeps the familiar requestPermissionsAsync /
+// createAssetAsync / createAlbumAsync shape, matching the FileSystem
+// legacy import above so this file isn't mixing old- and new-style APIs.
+import * as MediaLibrary from "expo-media-library/legacy";
 
 import { buildScanUrl, fetchPublicVehicleByToken, getOrCreateVehicleQr, getVehicle } from "@/api/client";
 import { QRCodeResponse, Vehicle } from "@/api/types";
@@ -23,14 +34,27 @@ type LoadState = "loading" | "ready" | "error";
 /**
  * Owner-facing "My QR code" screen for a single vehicle.
  *
- * Native (iOS/Android): Print.printToFileAsync -> copy into a known cache
- * path -> Sharing.shareAsync, per the standard expo workaround for the
- * "Not allowed to read file under given URL" FileProvider quirk.
+ * Download vs Share — genuinely separate actions now, no share sheet
+ * involved in Download at all:
+ *   - "Download QR code" (native): fetches the QR PNG via
+ *     ensureQrDownloaded(), then writes it directly into the device Photos
+ *     library (album "ParkConnect") via expo-media-library. One tap, no
+ *     dialog beyond the OS permission prompt (asked once) — the true
+ *     native equivalent of a browser download.
+ *   - "Share QR code" (native): calls the SAME ensureQrDownloaded() helper
+ *     (so it always operates on the exact file Download most recently
+ *     produced), then opens the OS share sheet on it for sending
+ *     elsewhere. This is unrelated to saving — MediaLibrary is never
+ *     touched here.
+ *   - Web is untouched: Download triggers a real browser file download
+ *     (downloadStickerPng), Share uses the Web Share API.
  *
- * Web: expo-print/expo-sharing don't produce a downloadable file in a
- * browser (printToFileAsync just opens the print dialog there too), so
- * web builds the sticker as a PNG on a <canvas> and triggers a real
- * browser download via a blob URL instead.
+ * IMPORTANT: expo-media-library is a native module. It does NOT work in
+ * plain Expo Go — this screen requires a native rebuild:
+ *   npx expo install expo-media-library
+ *   (add the expo-media-library config plugin to app.config.js)
+ *   npx expo prebuild --clean
+ *   npx expo run:android   (or run:ios, or an EAS dev-client build)
  */
 export default function VehicleQrScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -39,7 +63,8 @@ export default function VehicleQrScreen() {
   const [qr, setQr] = useState<QRCodeResponse | null>(null);
   const [state, setState] = useState<LoadState>("loading");
   const [verifying, setVerifying] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [sharing, setSharing] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -74,13 +99,86 @@ export default function VehicleQrScreen() {
     }
   }, [qr]);
 
+  /**
+   * Native-only helper: downloads the hosted QR PNG into the app cache dir
+   * and returns its local file:// uri. Used by BOTH downloadQr() and
+   * shareQr() — it's the single source of truth for "what file are we
+   * acting on", so Share always operates on exactly what Download most
+   * recently fetched instead of running its own separate download logic.
+   *
+   * Cheap to call repeatedly: FileSystem.downloadAsync overwrites the same
+   * cache path each time, so calling this twice in a row (Download, then
+   * Share) just re-fetches the same bytes rather than accumulating files.
+   */
+  const ensureQrDownloaded = useCallback(async (): Promise<string> => {
+    if (!qr?.qr_image_url) {
+      throw new Error("No QR image available to download");
+    }
+    const targetUri = `${FileSystem.cacheDirectory}parkconnect-qr-${qr.token}.png`;
+    const result = await FileSystem.downloadAsync(qr.qr_image_url, targetUri);
+    return result.uri;
+  }, [qr]);
+
+  /**
+   * "Download QR code" — the true one-tap equivalent of the web download:
+   * fetches the QR PNG to cache, then writes it straight into the device's
+   * Photos library inside a "ParkConnect" album via expo-media-library.
+   * No share sheet, no second tap — once permission is granted, this is
+   * the entire flow, same as clicking "download" in a browser.
+   *
+   * Requires a native rebuild (npx expo prebuild + a dev client or EAS
+   * build) since expo-media-library is a native module — this will throw
+   * "Cannot find native module" if run inside plain Expo Go.
+   */
+  const downloadQr = useCallback(async () => {
+    if (!qr) return;
+    setDownloading(true);
+    try {
+      const label = vehicle ? `${vehicle.brand} ${vehicle.model}` : "ParkConnect";
+
+      if (Platform.OS === "web") {
+        await downloadStickerPng(qr.qr_image_url, label, `parkconnect-qr-${qr.token}.png`);
+        return;
+      }
+
+      const { status, canAskAgain } = await MediaLibrary.requestPermissionsAsync();
+
+      if (status !== "granted") {
+        if (!canAskAgain) {
+          Alert.alert(
+            "Permission needed",
+            "Photo library access is off for ParkConnect. Enable it in your device Settings to download the QR code."
+          );
+        } else {
+          Alert.alert("Permission denied", "Couldn't save to Photos without permission.");
+        }
+        return;
+      }
+
+      const localUri = await ensureQrDownloaded();
+      const asset = await MediaLibrary.createAssetAsync(localUri);
+      await MediaLibrary.createAlbumAsync("ParkConnect", asset, false);
+
+      Alert.alert("Downloaded", "The QR code has been saved to your Photos (ParkConnect album).");
+    } catch (err) {
+      console.error("downloadQr failed:", err);
+      Alert.alert("Couldn't download", "Something went wrong saving the QR code to Photos.");
+    } finally {
+      setDownloading(false);
+    }
+  }, [qr, vehicle, ensureQrDownloaded]);
+
+  /**
+   * "Share QR code" — reuses whatever ensureQrDownloaded() produces (the
+   * exact same file Download creates) and opens the native share sheet on
+   * it. This is also where the user gets to "Save Image"/"Save to
+   * Downloads" on their OS, since that lives inside the share sheet itself.
+   */
   const shareQr = useCallback(async () => {
     if (!qr) return;
-    const scanUrl = buildScanUrl(qr.token);
 
     if (Platform.OS === "web") {
-      // No filesystem / native share sheet on web — use the Web Share API
-      // for the link itself if the browser supports it.
+      const scanUrl = buildScanUrl(qr.token);
       if (typeof navigator !== "undefined" && (navigator as any).share) {
         try {
           await (navigator as any).share({ title: "ParkConnect QR code", url: scanUrl });
@@ -93,35 +191,46 @@ export default function VehicleQrScreen() {
       return;
     }
 
-    const available = await Sharing.isAvailableAsync();
-    if (!available) {
-      Alert.alert("Sharing unavailable", `You can share this link manually: ${scanUrl}`);
-      return;
-    }
+    setSharing(true);
     try {
-      const { uri } = await Print.printToFileAsync({
-        html: buildStickerHtml(scanUrl, qr.qr_image_url, vehicle),
-      });
-      const safeUri = `${FileSystem.cacheDirectory}parkconnect-qr-${qr.token}.pdf`;
-      await FileSystem.copyAsync({ from: uri, to: safeUri });
-      await Sharing.shareAsync(safeUri, {
-        mimeType: "application/pdf",
+      const available = await Sharing.isAvailableAsync();
+      if (!available) {
+        Alert.alert(
+          "Sharing unavailable",
+          `You can share this link manually: ${buildScanUrl(qr.token)}`
+        );
+        return;
+      }
+
+      const localUri = await ensureQrDownloaded();
+      await Sharing.shareAsync(localUri, {
+        mimeType: "image/png",
         dialogTitle: "Share your ParkConnect QR code",
+        UTI: "public.png",
       });
     } catch (err) {
       console.error("shareQr failed:", err);
       Alert.alert("Couldn't share", "Something went wrong preparing the file to share.");
+    } finally {
+      setSharing(false);
     }
-  }, [qr, vehicle]);
+  }, [qr, ensureQrDownloaded]);
 
-  const exportPdf = useCallback(async () => {
+  /**
+   * "Export printable sticker" — unchanged from before: a separate, more
+   * elaborate artifact (a 3in PDF with the vehicle name/caption baked in
+   * via expo-print), distinct from the plain QR PNG that Download/Share
+   * now handle. Kept as its own action since it's a different output, not
+   * a duplicate of Share.
+   */
+  const [exportingSticker, setExportingSticker] = useState(false);
+  const exportStickerPdf = useCallback(async () => {
     if (!qr) return;
-    setExporting(true);
+    setExportingSticker(true);
     try {
-      const label = vehicle ? `${vehicle.brand} ${vehicle.model}` : "ParkConnect";
-
-      if (Platform.OS === "web") {
-        await downloadStickerPng(qr.qr_image_url, label, `parkconnect-qr-${qr.token}.png`);
+      const available = await Sharing.isAvailableAsync();
+      if (!available) {
+        Alert.alert("Sharing unavailable", "This device can't open the save/share dialog.");
         return;
       }
 
@@ -134,20 +243,15 @@ export default function VehicleQrScreen() {
       const safeUri = `${FileSystem.cacheDirectory}parkconnect-sticker-${qr.token}.pdf`;
       await FileSystem.copyAsync({ from: uri, to: safeUri });
 
-      const available = await Sharing.isAvailableAsync();
-      if (available) {
-        await Sharing.shareAsync(safeUri, {
-          mimeType: "application/pdf",
-          dialogTitle: "Save or print your QR sticker",
-        });
-      } else {
-        Alert.alert("Saved", `PDF created at ${safeUri}, but sharing isn't available on this device.`);
-      }
+      await Sharing.shareAsync(safeUri, {
+        mimeType: "application/pdf",
+        dialogTitle: "Save or print your QR sticker",
+      });
     } catch (err) {
-      console.error("exportPdf failed:", err);
-      Alert.alert("Couldn't export", "Something went wrong preparing the file to export.");
+      console.error("exportStickerPdf failed:", err);
+      Alert.alert("Couldn't export", "Something went wrong preparing the sticker PDF.");
     } finally {
-      setExporting(false);
+      setExportingSticker(false);
     }
   }, [qr, vehicle]);
 
@@ -188,23 +292,43 @@ export default function VehicleQrScreen() {
         {buildScanUrl(qr.token)}
       </Text>
 
-      <TouchableOpacity style={styles.buttonPrimary} onPress={shareQr}>
-        <Text style={styles.buttonPrimaryText}>Share QR code</Text>
+      <TouchableOpacity
+        style={styles.buttonPrimary}
+        onPress={downloadQr}
+        disabled={downloading}
+      >
+        {downloading ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.buttonPrimaryText}>Download QR code</Text>
+        )}
       </TouchableOpacity>
 
       <TouchableOpacity
         style={styles.buttonSecondary}
-        onPress={exportPdf}
-        disabled={exporting}
+        onPress={shareQr}
+        disabled={sharing}
       >
-        {exporting ? (
+        {sharing ? (
           <ActivityIndicator />
         ) : (
-          <Text style={styles.buttonSecondaryText}>
-            {Platform.OS === "web" ? "Download printable sticker" : "Export printable sticker (3in)"}
-          </Text>
+          <Text style={styles.buttonSecondaryText}>Share QR code</Text>
         )}
       </TouchableOpacity>
+
+      {Platform.OS !== "web" ? (
+        <TouchableOpacity
+          style={styles.buttonSecondary}
+          onPress={exportStickerPdf}
+          disabled={exportingSticker}
+        >
+          {exportingSticker ? (
+            <ActivityIndicator />
+          ) : (
+            <Text style={styles.buttonSecondaryText}>Export printable sticker (3in PDF)</Text>
+          )}
+        </TouchableOpacity>
+      ) : null}
 
       <TouchableOpacity
         style={styles.buttonTertiary}
@@ -221,8 +345,13 @@ export default function VehicleQrScreen() {
   );
 }
 
-function buildStickerHtml(scanUrl: string, qrImageUrl: string | null, vehicle: Vehicle | null): string {
-  const label = vehicle ? `${vehicle.brand} ${vehicle.model}` : "ParkConnect";
+function buildStickerHtml(
+  scanUrl: string,
+  qrImageUrl: string | null,
+  vehicle: Vehicle | null,
+  overrideLabel?: string
+): string {
+  const label = overrideLabel ?? (vehicle ? `${vehicle.brand} ${vehicle.model}` : "ParkConnect");
   return `
     <html>
       <head>
@@ -251,7 +380,8 @@ function buildStickerHtml(scanUrl: string, qrImageUrl: string | null, vehicle: V
 
 // ---------------------------------------------------------------------------
 // Web-only: compose the sticker as a PNG on a canvas and download it as a
-// real file. Native platforms never call this — they use expo-print instead.
+// real file. Native platforms never call this — they use expo-file-system
+// (ensureQrDownloaded) instead.
 // ---------------------------------------------------------------------------
 
 function loadImage(src: string): Promise<HTMLImageElement> {

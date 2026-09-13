@@ -105,16 +105,22 @@ module.exports = ({ config }) => {
         },
       ],
       [
-       "expo-sharing",
-       {
-         android: { enabled: true },
-         ios: { enabled: true },
-       },
-     ],
-      // expo-secure-store has no config plugin requirement on its own, but
-      // is listed here as a reminder this app relies on it for token
-      // storage (see src/api/client.ts) rather than AsyncStorage.
-    ],
+        "expo-sharing",
+        {
+          android: { enabled: true },
+          ios: { enabled: true },
+        },
+      ],
+        // "Download QR code" (native equivalent of the web download button).
+        [
+          "expo-media-library",
+          {
+            photosPermission: "Allow ParkConnect to save your QR sticker to Photos.",
+            savePhotosPermission: "Allow ParkConnect to save your QR sticker to Photos.",
+            isAccessMediaLocationEnabled: false,
+          },
+        ],
+      ],
 
     experiments: {
       typedRoutes: true,
