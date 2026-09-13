@@ -3,12 +3,59 @@ import Constants from "expo-constants";
 
 import { secureStorage } from "@/utils/secureStorage";
 import {
+  CallTarget,
+  InitiateCallResponse,
+  InitiateTextResponse,
   PublicVehicleResponse,
   QRCodeResponse,
   TokenResponse,
   Vehicle,
   VehicleListResponse,
 } from "./types";
+
+
+/**
+ * PUBLIC, unauthenticated masked call — mirrors POST /calls/initiate in
+ * app/routers/calls.py. target="owner" (default) bridges to the vehicle
+ * owner's real number; target="emergency" bridges to the vehicle's stored
+ * emergency_contact instead. Neither number is ever exposed to this client
+ * — only Twilio's masked caller ID is visible on either leg of the call.
+ */
+
+export async function initiateCall(
+  token: string,
+  scannerPhone: string,
+  target: CallTarget = "owner"
+): Promise<InitiateCallResponse> {
+  if (USE_MOCK) return { status: "calling", call_id: "mock-call-id" };
+  const { data } = await api.post<InitiateCallResponse>("/calls/initiate", {
+    token,
+    scanner_phone: scannerPhone,
+    target,
+  });
+  return data;
+}
+
+/**
+ * PUBLIC, unauthenticated masked text — mirrors POST /texts/initiate.
+ * One-way: sends `message` to the owner's real phone via a shared Twilio
+ * number; there is no reply channel back to the scanner yet (see the
+ * backend router's docstring).
+ */
+
+export async function initiateText(
+  token: string,
+  scannerPhone: string,
+  message: string
+): Promise<InitiateTextResponse> {
+  if (USE_MOCK) return { status: "sent", text_id: "mock-text-id" };
+  const { data } = await api.post<InitiateTextResponse>("/texts/initiate", {
+    token,
+    scanner_phone: scannerPhone,
+    message,
+  });
+  return data;
+}
 
 // Runtime flag, not a hardcoded boolean — set via app.config.js / EAS env,
 // so QA can still flip to mock offline demo mode without a code change.

@@ -47,3 +47,15 @@ export interface ApiError {
   code?: string;
   message: string;
 }
+
+export type CallTarget = "owner" | "emergency";
+
+export interface InitiateCallResponse {
+  status: string;
+  call_id: string;
+}
+
+export interface InitiateTextResponse {
+  status: string;
+  text_id: string;
+}
